@@ -81,3 +81,8 @@ def test_transfer_invalid_amount():
     b = create("Bob", 0)
     r = client.post("/transfers", json={"from_id": a["id"], "to_id": b["id"], "amount": 0})
     assert r.status_code == 422
+
+
+def test_simulated_delay(monkeypatch):
+    monkeypatch.setenv("SIMULATED_DELAY_MS", "1")
+    assert client.get("/health").status_code == 200

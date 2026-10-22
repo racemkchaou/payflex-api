@@ -1,0 +1,12 @@
+title = "PayFlex - configuration Gitleaks"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "credit-card-number"
+description = "Numero de carte bancaire (donnee personnelle)"
+regex = '''\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14})\b'''
+
+[allowlist]
+paths = ['''venv/''', '''reports/''', '''\.git/''']

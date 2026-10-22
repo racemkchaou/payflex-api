@@ -1,9 +1,19 @@
+import asyncio
+import os
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="PayFlex API", version="1.0.0")
+
+@app.middleware("http")
+async def simulate_latency(request: Request, call_next):
+    # Injection de panne : sert uniquement a demontrer le Quality Gate
+    delay_ms = int(os.getenv("SIMULATED_DELAY_MS", "0"))
+    if delay_ms > 0:
+        await asyncio.sleep(delay_ms / 1000)
+    return await call_next(request)
 
 # Base de donnees en memoire (suffisant pour le TP)
 accounts: dict[str, dict] = {}

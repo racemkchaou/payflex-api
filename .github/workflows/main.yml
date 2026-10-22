@@ -1,0 +1,161 @@
+name: PayFlex CI/CD
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      simulated_delay_ms:
+        description: "Latence artificielle injectee dans l'API (ms) pour simuler une regression de performance"
+        required: false
+        default: "0"
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1. Confidentialite : premier controle, une fuite stoppe tout
+  # ---------------------------------------------------------------
+  secrets-scan:
+    name: 1 - Scan des secrets (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer Gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+
+      - name: Scanner le code et les fichiers de configuration
+        run: |
+          mkdir -p reports
+          gitleaks detect --source . --no-git --config .gitleaks.toml --redact --no-banner \
+            --report-format json --report-path reports/gitleaks-report.json --exit-code 0
+          [ -f reports/gitleaks-report.json ] || echo "[]" > reports/gitleaks-report.json
+
+      - name: Quality Gate - taux de confidentialite
+        run: python3 scripts/quality_gate.py secrets --file reports/gitleaks-report.json
+
+      - name: Publier les rapports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-secrets
+          path: reports/
+
+  # ---------------------------------------------------------------
+  # 2. Tests unitaires + couverture
+  # ---------------------------------------------------------------
+  unit-tests:
+    name: 2 - Tests unitaires et couverture
+    needs: secrets-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installer les dependances
+        run: pip install -r requirements.txt
+
+      - name: Tests unitaires (pytest + couverture)
+        run: |
+          mkdir -p reports
+          pytest --cov=app --cov-report=term-missing --cov-report=xml:reports/coverage.xml
+
+      - name: Quality Gate - couverture
+        run: python3 scripts/quality_gate.py coverage --file reports/coverage.xml
+
+      - name: Publier les rapports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-unit
+          path: reports/
+
+  # ---------------------------------------------------------------
+  # 3. Tests d'integration : conteneur ephemere + Newman
+  # ---------------------------------------------------------------
+  integration-tests:
+    name: 3 - Tests d'integration (Docker + Newman)
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construire l'image
+        run: docker build -t payflex-api:ci .
+
+      - name: Lancer le conteneur ephemere
+        run: |
+          docker run -d --name payflex -p 8000:8000 payflex-api:ci
+          for i in $(seq 1 30); do curl -sf http://localhost:8000/health && break || sleep 1; done
+
+      - name: Scenario API (Newman)
+        run: |
+          docker run --rm --network host -v "$PWD/postman:/etc/newman" postman/newman \
+            run payflex.postman_collection.json --env-var "baseUrl=http://localhost:8000"
+
+      - name: Logs du conteneur
+        if: always()
+        run: docker logs payflex
+
+      - name: Nettoyage
+        if: always()
+        run: docker rm -f payflex
+
+  # ---------------------------------------------------------------
+  # 4. Tests de performance : tir de charge k6
+  # ---------------------------------------------------------------
+  performance-tests:
+    name: 4 - Tests de performance (k6)
+    needs: integration-tests
+    runs-on: ubuntu-latest
+    env:
+      SIMULATED_DELAY_MS: ${{ github.event.inputs.simulated_delay_ms || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lancer l'API (latence simulee = ${{ env.SIMULATED_DELAY_MS }} ms)
+        run: |
+          docker build -t payflex-api:ci .
+          docker run -d --name payflex -p 8000:8000 -e SIMULATED_DELAY_MS="$SIMULATED_DELAY_MS" payflex-api:ci
+          for i in $(seq 1 30); do curl -sf http://localhost:8000/health && break || sleep 1; done
+
+      - name: Tir de charge k6
+        run: |
+          mkdir -p reports
+          docker run --rm --network host -u "$(id -u):$(id -g)" -v "$PWD:/work" -w /work grafana/k6:0.54.0 \
+            run -e BASE_URL=http://localhost:8000 --summary-export=reports/perf-summary.json perf/load-test.js \
+            || echo "Seuils stricts k6 non respectes : le verdict (warning ou critique) est rendu par le Quality Gate"
+
+      - name: Quality Gate - performance
+        run: python3 scripts/quality_gate.py perf --file reports/perf-summary.json
+
+      - name: Publier les rapports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-perf
+          path: reports/
+
+      - name: Nettoyage
+        if: always()
+        run: docker rm -f payflex
+
+  # ---------------------------------------------------------------
+  # 5. Deploiement (simule) : seulement si tout est passe, sur main
+  # ---------------------------------------------------------------
+  deploy:
+    name: 5 - Deploiement (simule)
+    needs: performance-tests
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployer PayFlex API
+        run: |
+          echo "Tous les controles sont au vert."
+          echo "Deploiement de PayFlex API en production (simule)..."
