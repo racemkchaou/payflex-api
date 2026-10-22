@@ -1,0 +1,89 @@
+{
+  "info": {
+    "name": "PayFlex API - Tests d'integration",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" }
+  ],
+  "item": [
+    {
+      "name": "1. Health check",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Statut 200', function () { pm.response.to.have.status(200); });",
+        "pm.test('Statut ok', function () { pm.expect(pm.response.json().status).to.eql('ok'); });"
+      ]}}],
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+      }
+    },
+    {
+      "name": "2. Creer le compte Alice",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Statut 201', function () { pm.response.to.have.status(201); });",
+        "var json = pm.response.json();",
+        "pm.test('Solde initial 100', function () { pm.expect(json.balance).to.eql(100); });",
+        "pm.collectionVariables.set('idAlice', json.id);"
+      ]}}],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"owner\": \"Alice\", \"balance\": 100}" },
+        "url": { "raw": "{{baseUrl}}/accounts", "host": ["{{baseUrl}}"], "path": ["accounts"] }
+      }
+    },
+    {
+      "name": "3. Creer le compte Bob",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Statut 201', function () { pm.response.to.have.status(201); });",
+        "pm.collectionVariables.set('idBob', pm.response.json().id);"
+      ]}}],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"owner\": \"Bob\", \"balance\": 20}" },
+        "url": { "raw": "{{baseUrl}}/accounts", "host": ["{{baseUrl}}"], "path": ["accounts"] }
+      }
+    },
+    {
+      "name": "4. Virement de 30 d'Alice vers Bob",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Statut 200', function () { pm.response.to.have.status(200); });",
+        "var json = pm.response.json();",
+        "pm.test('Solde Alice 70', function () { pm.expect(json.from_balance).to.eql(70); });",
+        "pm.test('Solde Bob 50', function () { pm.expect(json.to_balance).to.eql(50); });"
+      ]}}],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"from_id\": \"{{idAlice}}\", \"to_id\": \"{{idBob}}\", \"amount\": 30}" },
+        "url": { "raw": "{{baseUrl}}/transfers", "host": ["{{baseUrl}}"], "path": ["transfers"] }
+      }
+    },
+    {
+      "name": "5. Consulter le compte Alice",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Statut 200', function () { pm.response.to.have.status(200); });",
+        "pm.test('Solde Alice 70', function () { pm.expect(pm.response.json().balance).to.eql(70); });"
+      ]}}],
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/accounts/{{idAlice}}", "host": ["{{baseUrl}}"], "path": ["accounts", "{{idAlice}}"] }
+      }
+    },
+    {
+      "name": "6. Virement refuse (solde insuffisant)",
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+        "pm.test('Statut 400', function () { pm.response.to.have.status(400); });",
+        "pm.test('Message solde insuffisant', function () { pm.expect(pm.response.json().detail).to.eql('Solde insuffisant'); });"
+      ]}}],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\"from_id\": \"{{idAlice}}\", \"to_id\": \"{{idBob}}\", \"amount\": 5000}" },
+        "url": { "raw": "{{baseUrl}}/transfers", "host": ["{{baseUrl}}"], "path": ["transfers"] }
+      }
+    }
+  ]
+}
